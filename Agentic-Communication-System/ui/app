@@ -1,0 +1,886 @@
+import asyncio
+import json
+import sys
+import time
+from datetime import datetime
+from io import BytesIO
+from pathlib import Path
+from typing import Any
+
+import pandas as pd
+import streamlit as st
+
+from reportlab.lib import colors
+from reportlab.lib.enums import TA_LEFT
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.units import mm
+from reportlab.platypus import (
+    HRFlowable,
+    PageBreak,
+    Paragraph,
+    Preformatted,
+    SimpleDocTemplate,
+    Spacer,
+    Table,
+    TableStyle,
+)
+
+
+# =========================================================
+# Project imports
+# =========================================================
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from workflow_runner import MACHINE_DATA, run_allocation  # noqa: E402
+
+
+# =========================================================
+# Brand palette
+# =========================================================
+
+BRAND = {
+    "forest": "#0F5C3B",
+    "green": "#1B8A5A",
+    "green_light": "#E8F6EE",
+    "mint": "#EFFBF4",
+    "teal": "#17A398",
+    "gold": "#F0A73A",
+    "bg": "#F4FAF6",
+    "card": "#FFFFFF",
+    "text": "#12261C",
+    "muted": "#5C6F65",
+    "border": "#D9EEE1",
+    "danger": "#E15B4D",
+}
+
+
+# =========================================================
+# Streamlit page configuration
+# =========================================================
+
+st.set_page_config(
+    page_title="Intelligent Manufacturing Decision System",
+    page_icon="",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+if "page" not in st.session_state:
+    st.session_state.page = "welcome"
+
+
+# =========================================================
+# Styling
+# =========================================================
+
+def apply_css() -> None:
+    st.markdown(
+        f"""
+        <style>
+
+        @import url('https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap');
+
+        html, body, [class*="css"] {{
+            font-family: 'Inter', sans-serif !important;
+        }}
+
+        h1, h2, h3, h4, h5, h6,
+        [data-testid="stMetricValue"] {{
+            font-family: 'Oswald', sans-serif !important;
+            color: {BRAND['forest']} !important;
+            font-weight: 700 !important;
+            text-transform: uppercase;
+            letter-spacing: 0.01em;
+        }}
+
+        .stApp {{
+            background: {BRAND['bg']} !important;
+        }}
+
+        [data-testid="stHeader"] {{
+            background: transparent !important;
+        }}
+
+        /* Force every piece of text in the main content area to dark green.
+           Buttons, pills, sidebar and hero are overridden again below. */
+        .block-container, .block-container * {{
+            color: {BRAND['forest']} !important;
+        }}
+
+        [data-testid="stSidebar"] {{
+            background: {BRAND['forest']} !important;
+            border-radius: 0 !important;
+        }}
+
+        [data-testid="stSidebar"] * {{
+            color: #FFFFFF !important;
+        }}
+
+        .block-container {{
+            max-width: 1450px;
+            padding-top: 1.5rem;
+            padding-bottom: 3rem;
+        }}
+
+        /* Cards, forms, containers -- hard edges, no shadows */
+        [data-testid="stForm"],
+        div[data-testid="stVerticalBlockBorderWrapper"] {{
+            background: {BRAND['card']} !important;
+            border: 2px solid {BRAND['forest']} !important;
+            border-radius: 0 !important;
+            box-shadow: none !important;
+            padding: 4px;
+        }}
+
+        [data-testid="stMetric"] {{
+            background: {BRAND['mint']} !important;
+            border: 2px solid {BRAND['forest']} !important;
+            border-left: 6px solid {BRAND['green']} !important;
+            border-radius: 0 !important;
+            padding: 16px !important;
+            min-height: 100px;
+            box-shadow: none !important;
+        }}
+
+        [data-testid="stMetricLabel"] {{
+            font-weight: 700 !important;
+            text-transform: uppercase;
+            font-size: 0.78rem !important;
+        }}
+
+        [data-testid="stMetricValue"] {{
+            font-size: 1.4rem !important;
+        }}
+
+        [data-testid="stTextInput"] input,
+        [data-testid="stNumberInput"] input,
+        [data-baseweb="select"] > div {{
+            background: #FFFFFF !important;
+            border: 2px solid {BRAND['forest']} !important;
+            border-radius: 0 !important;
+            color: {BRAND['forest']} !important;
+        }}
+
+        [data-testid="stFormSubmitButton"] button,
+        [data-testid="stDownloadButton"] button,
+        div.stButton > button {{
+            border: 2px solid {BRAND['forest']} !important;
+            background: {BRAND['forest']} !important;
+            color: #FFFFFF !important;
+            border-radius: 0 !important;
+            min-height: 46px;
+            font-weight: 700;
+            font-family: 'Oswald', sans-serif !important;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+            box-shadow: none !important;
+            transition: background 0.1s ease;
+        }}
+
+        [data-testid="stFormSubmitButton"] button *,
+        [data-testid="stDownloadButton"] button *,
+        div.stButton > button * {{
+            color: #FFFFFF !important;
+        }}
+
+        [data-testid="stFormSubmitButton"] button:hover,
+        [data-testid="stDownloadButton"] button:hover,
+        div.stButton > button:hover {{
+            background: {BRAND['green']} !important;
+        }}
+
+        [data-testid="stProgress"] > div > div {{
+            border-radius: 0 !important;
+        }}
+
+        [data-testid="stProgress"] > div > div > div {{
+            background: {BRAND['forest']} !important;
+            border-radius: 0 !important;
+        }}
+
+        [data-testid="stDataFrame"] {{
+            border: 2px solid {BRAND['forest']} !important;
+            border-radius: 0 !important;
+            overflow: hidden;
+        }}
+
+        [data-testid="stExpander"] {{
+            border: 2px solid {BRAND['forest']} !important;
+            border-radius: 0 !important;
+            background: #FFFFFF !important;
+        }}
+
+        hr {{
+            border-color: {BRAND['forest']} !important;
+        }}
+
+        /* Custom badge pills -- solid fill, hard edges, white text for contrast */
+        .pill {{
+            display: inline-block;
+            padding: 4px 14px;
+            border-radius: 0 !important;
+            font-weight: 700;
+            font-size: 0.8rem;
+            font-family: 'Inter', sans-serif;
+            text-transform: uppercase;
+            letter-spacing: 0.02em;
+            border: 2px solid {BRAND['forest']};
+        }}
+        .pill, .pill * {{ color: #FFFFFF !important; }}
+        .pill-green {{ background: {BRAND['forest']}; }}
+        .pill-gold {{ background: #8A5B0C; border-color: #8A5B0C; }}
+        .pill-red {{ background: #7A2418; border-color: #7A2418; }}
+
+        /* Welcome hero */
+        .hero {{
+            background: {BRAND['forest']};
+            border: 2px solid {BRAND['forest']};
+            border-radius: 0 !important;
+            padding: 64px 48px;
+            box-shadow: none !important;
+            margin-bottom: 28px;
+        }}
+        .hero, .hero * {{
+            color: #FFFFFF !important;
+        }}
+        .hero h1 {{
+            font-size: 2.6rem !important;
+            margin-bottom: 6px;
+        }}
+        .hero p {{
+            font-size: 1.05rem;
+            max-width: 720px;
+        }}
+        .hero-tag {{
+            display: inline-block;
+            background: transparent;
+            border: 2px solid #FFFFFF;
+            padding: 5px 16px;
+            border-radius: 0 !important;
+            font-size: 0.82rem;
+            font-weight: 700;
+            margin-bottom: 18px;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+        }}
+        .feature-card {{
+            background: #FFFFFF;
+            border: 2px solid {BRAND['forest']};
+            border-radius: 0 !important;
+            padding: 22px 20px;
+            height: 100%;
+            box-shadow: none !important;
+        }}
+        .feature-card, .feature-card * {{
+            color: {BRAND['forest']} !important;
+        }}
+        .feature-index {{
+            font-family: 'Oswald', sans-serif;
+            font-size: 1.3rem;
+            font-weight: 700;
+            border-bottom: 3px solid {BRAND['green']};
+            display: inline-block;
+            padding-bottom: 2px;
+        }}
+        .feature-card h4 {{
+            font-family: 'Oswald', sans-serif;
+            margin: 10px 0 4px 0;
+            text-transform: uppercase;
+        }}
+        .feature-card p {{
+            font-size: 0.92rem;
+            margin: 0;
+        }}
+
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def pill(text: str, kind: str = "green") -> str:
+    return f'<span class="pill pill-{kind}">{text}</span>'
+
+
+apply_css()
+
+
+# =========================================================
+# PDF generation
+# =========================================================
+
+def build_pdf_report(order: dict[str, Any], result: dict[str, Any], execution_time: float) -> bytes:
+    buffer = BytesIO()
+
+    document = SimpleDocTemplate(
+        buffer,
+        pagesize=A4,
+        rightMargin=18 * mm,
+        leftMargin=18 * mm,
+        topMargin=16 * mm,
+        bottomMargin=16 * mm,
+    )
+
+    forest = colors.HexColor("#0F5C3B")
+    green = colors.HexColor("#1B8A5A")
+    mint = colors.HexColor("#E8F6EE")
+
+    styles = getSampleStyleSheet()
+
+    title_style = ParagraphStyle(
+        "TitleCustom", parent=styles["Title"], fontName="Helvetica-Bold",
+        fontSize=19, leading=23, textColor=forest, spaceAfter=6,
+    )
+    subtitle_style = ParagraphStyle(
+        "SubtitleCustom", parent=styles["BodyText"], fontName="Helvetica",
+        fontSize=9.5, leading=12, textColor=colors.HexColor("#5C6F65"), spaceAfter=10,
+    )
+    heading_style = ParagraphStyle(
+        "HeadingCustom", parent=styles["Heading2"], fontName="Helvetica-Bold",
+        fontSize=12.5, leading=15, textColor=green, spaceBefore=14, spaceAfter=6,
+    )
+    body_style = ParagraphStyle(
+        "BodyCustom", parent=styles["BodyText"], fontName="Helvetica",
+        fontSize=9, leading=13, textColor=colors.HexColor("#12261C"), alignment=TA_LEFT,
+    )
+
+    story: list[Any] = []
+
+    story.append(Paragraph("Intelligent Manufacturing Decision Report", title_style))
+    story.append(Paragraph("Generated: " + datetime.now().strftime("%d %B %Y, %H:%M:%S"), subtitle_style))
+    story.append(HRFlowable(width="100%", thickness=1.4, color=green, spaceAfter=10))
+
+    story.append(Paragraph("Order Information", heading_style))
+    order_rows = [["Field", "Value"]]
+    for key, value in order.items():
+        order_rows.append([key.replace("_", " ").title(), str(value)])
+    order_table = Table(order_rows, colWidths=[58 * mm, 105 * mm])
+    order_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), forest),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, mint]),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#D9EEE1")),
+        ("FONTSIZE", (0, 0), (-1, -1), 9),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("TOPPADDING", (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+    ]))
+    story.append(order_table)
+
+    story.append(Paragraph("Recommendation", heading_style))
+    story.append(Paragraph(str(result.get("recommendation", "No recommendation.")), body_style))
+
+    story.append(Paragraph("Reasoning", heading_style))
+    story.append(Paragraph(
+        str(result.get("reasoning", result.get("justification", "No reasoning."))), body_style,
+    ))
+
+    verification = result.get("verification_result", {})
+    issues = verification.get("issues_found", [])
+
+    story.append(Paragraph("Verification Result", heading_style))
+    story.append(Paragraph(f"Status: {verification.get('status', 'not_run')}", body_style))
+    story.append(Paragraph(f"Fallback used: {verification.get('used_fallback', False)}", body_style))
+    story.append(Paragraph(
+        "Issues found: " + ("; ".join(map(str, issues)) if issues else "None"), body_style,
+    ))
+
+    story.append(Paragraph("Required Actions", heading_style))
+    actions = result.get("required_actions", {})
+    action_table = Table(
+        [
+            ["Quality", str(actions.get("quality", "none"))],
+            ["Maintenance", str(actions.get("maintenance", "none"))],
+        ],
+        colWidths=[45 * mm, 118 * mm],
+    )
+    action_table.setStyle(TableStyle([
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#D9EEE1")),
+        ("BACKGROUND", (0, 0), (0, -1), mint),
+        ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, -1), 9),
+        ("TOPPADDING", (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+    ]))
+    story.append(action_table)
+
+    story.append(Paragraph("Rejected Machines", heading_style))
+    rejected = result.get("machines_filtered_out", [])
+    if rejected:
+        rejected_rows = [["Machine", "Reason"]]
+        for item in rejected:
+            rejected_rows.append([str(item.get("machine_id", "-")), str(item.get("reason", "-"))])
+        rejected_table = Table(rejected_rows, colWidths=[35 * mm, 128 * mm])
+        rejected_table.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#E15B4D")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#FCEBE8")]),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#D9EEE1")),
+            ("FONTSIZE", (0, 0), (-1, -1), 8),
+        ]))
+        story.append(rejected_table)
+    else:
+        story.append(Paragraph("No rejected machines.", body_style))
+
+    story.append(PageBreak())
+    story.append(Paragraph("Structured Evidence", heading_style))
+    story.append(Preformatted(
+        json.dumps(result.get("evidence", {}), indent=2, default=str), body_style, maxLineLength=100,
+    ))
+
+    story.append(Paragraph("Retrieved Information", heading_style))
+    story.append(Preformatted(
+        json.dumps(result.get("retrieved_information", []), indent=2, default=str), body_style, maxLineLength=100,
+    ))
+
+    story.append(Paragraph("Execution Summary", heading_style))
+    story.append(Paragraph(f"Execution time: {execution_time:.2f} seconds", body_style))
+
+    document.build(story)
+    return buffer.getvalue()
+
+
+# =========================================================
+# WELCOME PAGE
+# =========================================================
+
+def render_welcome() -> None:
+    st.markdown(
+        """
+        <div class="hero">
+            <div class="hero-tag">MANUFACTURING INTELLIGENCE PLATFORM</div>
+            <h1>Intelligent Manufacturing Decision System</h1>
+            <p>Deterministic machine allocation, grounded AI reasoning and automatic verification,
+            built to give your production floor clear, explainable decisions in seconds.</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown("#### Why teams use this platform")
+
+    features = [
+        ("Multi-Agent Allocation", "Specialized agents evaluate every machine on quality risk, maintenance and queue load."),
+        ("Rule-Based Selection", "Deterministic, auditable rules decide the winning machine, no black boxes."),
+        ("Evidence Grounding", "Every recommendation is backed by structured, traceable evidence."),
+        ("Gemini Reasoning", "Natural-language justification generated from the real evidence package."),
+        ("Auto-Verification", "Explanations are automatically checked for accuracy before you see them."),
+        ("One-Click Reports", "Export a polished PDF or JSON record of every decision, instantly."),
+    ]
+
+    cols = st.columns(3, gap="medium")
+    for index, (title, desc) in enumerate(features):
+        with cols[index % 3]:
+            st.markdown(
+                f"""
+                <div class="feature-card">
+                    <div class="feature-index">{index + 1:02d}</div>
+                    <h4>{title}</h4>
+                    <p>{desc}</p>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            st.write("")
+
+    st.write("")
+    st.write("")
+
+    _, center, _ = st.columns([1, 1, 1])
+    with center:
+        if st.button("Enter the Dashboard", use_container_width=True):
+            st.session_state.page = "app"
+            st.rerun()
+
+    st.write("")
+    st.caption(f"{len(MACHINE_DATA)} machines currently connected to the network · ready for allocation")
+
+
+# =========================================================
+# MAIN DASHBOARD
+# =========================================================
+
+def render_dashboard() -> None:
+
+    with st.sidebar:
+        st.markdown("##  Platform")
+        if st.button("⟵ Back to Welcome", use_container_width=True):
+            st.session_state.page = "welcome"
+            st.rerun()
+        st.divider()
+        st.markdown("**Capabilities**")
+        st.write("Multi-agent order allocation")
+        st.write("Rule-based machine selection")
+        st.write("Structured evidence grounding")
+        st.write("Gemini-generated reasoning")
+        st.write("Automatic explanation verification")
+
+    st.title("Intelligent Manufacturing Decision System")
+    st.caption(
+        "Manufacturing Intelligence Platform. Deterministic machine allocation "
+        "with grounded Gemini reasoning and automatic verification."
+    )
+    st.divider()
+
+    input_col, network_col = st.columns([0.85, 1.35], gap="large")
+
+    with input_col:
+        st.subheader("Order Information")
+        st.caption("Enter the manufacturing requirements.")
+
+        with st.form("order_form"):
+            order_id = st.text_input("Order ID", value="ORD-001")
+            priority = st.selectbox("Priority", ["low", "medium", "high", "urgent"], index=2)
+            required_capability = st.selectbox("Required Capability", ["milling", "turning"])
+            deadline_minutes = st.number_input("Deadline in Minutes", min_value=1, max_value=10000, value=120, step=5)
+            quality_requirement = st.selectbox("Quality Requirement", ["standard", "strict"], index=1)
+            submitted = st.form_submit_button("▶ Run Allocation", use_container_width=True)
+
+    with network_col:
+        st.subheader("Current Machine Network")
+        st.caption("Machine configuration currently available to the agents.")
+
+        machine_columns = st.columns(len(MACHINE_DATA))
+        for column, (machine_id, machine) in zip(machine_columns, MACHINE_DATA.items()):
+            with column:
+                with st.container(border=True):
+                    st.markdown(f"### {machine_id}")
+
+                    warnings = machine.get("active_warnings", [])
+                    if machine.get("status", "").lower() != "available":
+                        st.markdown(pill("Unavailable", "red"), unsafe_allow_html=True)
+                    elif warnings:
+                        st.markdown(pill("Warning", "gold"), unsafe_allow_html=True)
+                    else:
+                        st.markdown(pill("Available", "green"), unsafe_allow_html=True)
+
+                    st.write(f"**Capability:** {machine['capability'].title()}")
+                    st.write(f"**Queue Length:** {machine['queue_length']}")
+                    st.write(f"**Processing Time:** {machine['estimated_processing_time_mins']} min")
+                    st.write(f"**Maintenance:** {machine['maintenance_condition']:.0%}")
+                    st.write("**Warnings:** " + (", ".join(warnings) if warnings else "None"))
+
+    if not submitted:
+        return
+
+    if not order_id.strip():
+        st.error("Enter an Order ID.")
+        st.stop()
+
+    order_payload = {
+        "order_id": order_id.strip(),
+        "priority": priority,
+        "required_capability": required_capability,
+        "deadline_minutes": int(deadline_minutes),
+        "quality_requirement": quality_requirement,
+    }
+
+    st.divider()
+    st.subheader("Live Agent Activity")
+
+    activity_placeholder = st.empty()
+    progress_bar = st.progress(0)
+
+    timeline_steps = [
+        "Order received", "Order validated", "Coordinator started",
+        "Machine agents evaluated", "Quality assessment completed",
+        "Maintenance assessment completed", "Decision rules applied",
+        "Evidence package created", "Supporting information retrieved",
+        "Gemini reasoning generated", "Verification completed",
+        "Final recommendation completed",
+    ]
+
+    for index, step in enumerate(timeline_steps[:-1], start=1):
+        activity_placeholder.write("" + step)
+        progress_bar.progress(index / len(timeline_steps))
+        time.sleep(0.04)
+
+    start_time = time.perf_counter()
+
+    try:
+        recommendation = asyncio.run(run_allocation(**order_payload))
+    except Exception as error:
+        st.error("The workflow failed.")
+        st.exception(error)
+        st.stop()
+
+    execution_time = time.perf_counter() - start_time
+    result = recommendation.model_dump()
+
+    progress_bar.progress(1.0)
+    activity_placeholder.write("Final recommendation completed")
+
+    selected_machine = str(result.get("selected_machine", "none"))
+    rejected = result.get("machines_filtered_out", [])
+    rejected_ids = {str(item.get("machine_id", "")) for item in rejected}
+
+    verification = result.get("verification_result", {})
+    verification_status = str(verification.get("status", "not_run")).lower()
+    used_fallback = bool(verification.get("used_fallback", False))
+    suitable_count = max(len(MACHINE_DATA) - len(rejected_ids), 0)
+
+    st.divider()
+    st.header("Final Recommendation")
+
+    metric_columns = st.columns(5)
+    metric_columns[0].metric("Selected Machine", selected_machine.upper())
+    metric_columns[1].metric("Machines Evaluated", len(MACHINE_DATA))
+    metric_columns[2].metric("Suitable Machines", suitable_count)
+    metric_columns[3].metric("Verification", verification_status.upper())
+    metric_columns[4].metric("Execution Time", f"{execution_time:.2f} s")
+
+    st.subheader("Recommendation")
+    with st.container(border=True):
+        st.write(result.get("recommendation", "No recommendation returned."))
+
+    st.subheader("Reasoning")
+    with st.container(border=True):
+        st.write(result.get("reasoning", result.get("justification", "No reasoning returned.")))
+
+    st.subheader("Verification Result")
+    if verification_status == "passed":
+        st.markdown(pill("Verification Passed", "green"), unsafe_allow_html=True)
+    else:
+        st.markdown(pill("Verification Failed", "red"), unsafe_allow_html=True)
+
+    st.write("")
+    verification_columns = st.columns(3)
+    verification_columns[0].metric("Status", verification_status.upper())
+    verification_columns[1].metric("Issues Found", len(verification.get("issues_found", [])))
+    verification_columns[2].metric("Fallback Used", "YES" if used_fallback else "NO")
+
+    issues = verification.get("issues_found", [])
+    if issues:
+        st.write("**Detected Issues**")
+        for issue in issues:
+            st.write("- " + str(issue))
+
+    st.header("Supporting Evidence")
+
+    evidence = result.get("evidence", {})
+    order_evidence = evidence.get("order", {})
+    machine_statuses = evidence.get("machine_statuses", [])
+    quality_assessments = evidence.get("quality_assessments", [])
+    maintenance_assessments = evidence.get("maintenance_assessments", [])
+
+    evidence_left, evidence_right = st.columns(2, gap="large")
+
+    with evidence_left:
+        st.subheader("Order Evidence")
+        if order_evidence:
+            order_rows = [{"Field": key.replace("_", " ").title(), "Value": value} for key, value in order_evidence.items()]
+            st.dataframe(pd.DataFrame(order_rows), use_container_width=True, hide_index=True)
+
+        st.subheader("Machine Status Evidence")
+        if machine_statuses:
+            st.dataframe(pd.DataFrame(machine_statuses), use_container_width=True, hide_index=True)
+
+    with evidence_right:
+        st.subheader("Quality Evidence")
+        if quality_assessments:
+            st.dataframe(pd.DataFrame(quality_assessments), use_container_width=True, hide_index=True)
+
+        st.subheader("Maintenance Evidence")
+        if maintenance_assessments:
+            st.dataframe(pd.DataFrame(maintenance_assessments), use_container_width=True, hide_index=True)
+
+    st.header("Retrieved Information")
+    st.caption("Information selected from the evidence package before Gemini generated its explanation.")
+
+    retrieved_information = result.get("retrieved_information", [])
+    if retrieved_information:
+        retrieved_rows = []
+        for item in retrieved_information:
+            retrieved_rows.append({
+                "Type": item.get("type", "-"),
+                "Machine": item.get("machine_id", "-"),
+                "Retrieved Data": json.dumps(item.get("data", {}), ensure_ascii=False, default=str),
+            })
+        st.dataframe(pd.DataFrame(retrieved_rows), use_container_width=True, hide_index=True)
+    else:
+        st.info("No retrieved information.")
+
+    action_col, rejected_col = st.columns(2, gap="large")
+
+    with action_col:
+        st.header("Required Actions")
+        actions = result.get("required_actions", {})
+        with st.container(border=True):
+            st.markdown("#### Quality")
+            st.write(actions.get("quality", "none"))
+        with st.container(border=True):
+            st.markdown("#### Maintenance")
+            st.write(actions.get("maintenance", "none"))
+
+    with rejected_col:
+        st.header("Rejected Machines")
+        if rejected:
+            rejected_df = pd.DataFrame(rejected).rename(
+                columns={"machine_id": "Machine", "reason": "Rejection Reason"}
+            )
+            st.dataframe(rejected_df, use_container_width=True, hide_index=True)
+        else:
+            st.success("No rejected machines.")
+
+    st.header("Machine Decision Cards")
+
+    decision_columns = st.columns(len(MACHINE_DATA))
+    for column, (machine_id, machine) in zip(decision_columns, MACHINE_DATA.items()):
+        with column:
+            with st.container(border=True):
+                st.markdown(f"### {machine_id}")
+
+                if machine_id == selected_machine:
+                    st.markdown(pill("Selected", "green"), unsafe_allow_html=True)
+                    decision_reason = "Selected using queue length, quality risk and processing-time ranking."
+                elif machine_id in rejected_ids:
+                    st.markdown(pill("Rejected", "red"), unsafe_allow_html=True)
+                    decision_reason = next(
+                        (str(item.get("reason", "")) for item in rejected if str(item.get("machine_id", "")) == machine_id),
+                        "Rejected.",
+                    )
+                else:
+                    st.markdown(pill("Available", "gold"), unsafe_allow_html=True)
+                    decision_reason = "Passed the filtering stage."
+
+                st.write(f"**Capability:** {machine['capability'].title()}")
+                st.write(f"**Queue:** {machine['queue_length']}")
+                st.write(f"**Processing:** {machine['estimated_processing_time_mins']} min")
+                st.write(f"**Maintenance:** {machine['maintenance_condition']:.0%}")
+                st.write(f"**Decision:** {decision_reason}")
+
+    st.header("Machine Comparison")
+
+    chart_df = pd.DataFrame(
+        [
+            {
+                "Machine": machine_id,
+                "Queue Length": machine["queue_length"],
+                "Processing Time": machine["estimated_processing_time_mins"],
+                "Maintenance Condition": machine["maintenance_condition"] * 100,
+            }
+            for machine_id, machine in MACHINE_DATA.items()
+        ]
+    ).set_index("Machine")
+
+    chart_left, chart_right = st.columns(2, gap="large")
+
+    with chart_left:
+        st.subheader("Queue and Processing Comparison")
+        try:
+            st.bar_chart(
+                chart_df[["Queue Length", "Processing Time"]],
+                use_container_width=True,
+                color=["#1B8A5A", "#F0A73A"],
+            )
+        except TypeError:
+            st.bar_chart(chart_df[["Queue Length", "Processing Time"]], use_container_width=True)
+
+    with chart_right:
+        st.subheader("Maintenance Condition")
+        try:
+            st.bar_chart(chart_df[["Maintenance Condition"]], use_container_width=True, color=["#17A398"])
+        except TypeError:
+            st.bar_chart(chart_df[["Maintenance Condition"]], use_container_width=True)
+
+    timeline_col, summary_col = st.columns([1.2, 0.8], gap="large")
+
+    with timeline_col:
+        st.header("Agent Decision Timeline")
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        for step in timeline_steps:
+            st.write("**" + step + "**")
+            st.caption(timestamp)
+
+    with summary_col:
+        st.header("Decision Summary")
+        st.metric("Verification", verification_status.upper())
+        st.metric("Retrieved Items", len(retrieved_information))
+        st.metric("Fallback", "Used" if used_fallback else "Not Used")
+
+    st.header("Detailed Machine Data")
+
+    detail_rows = []
+    for machine_id, machine in MACHINE_DATA.items():
+        if machine_id == selected_machine:
+            decision_status = "Selected"
+        elif machine_id in rejected_ids:
+            decision_status = "Rejected"
+        else:
+            decision_status = "Available"
+
+        detail_rows.append({
+            "Machine": machine_id,
+            "Decision Status": decision_status,
+            "Operational Status": machine["status"].title(),
+            "Capability": machine["capability"].title(),
+            "Queue": machine["queue_length"],
+            "Processing Time (min)": machine["estimated_processing_time_mins"],
+            "Maintenance": f"{machine['maintenance_condition']:.0%}",
+            "Warnings": ", ".join(machine["active_warnings"]) or "None",
+        })
+
+    st.dataframe(pd.DataFrame(detail_rows), use_container_width=True, hide_index=True)
+
+    st.header("Technical Details")
+
+    with st.expander("Complete Evidence JSON"):
+        st.json(evidence)
+    with st.expander("Retrieved Information JSON"):
+        st.json(retrieved_information)
+    with st.expander("Complete Final Result"):
+        st.json(result)
+
+    export_data = {
+        "order": order_payload,
+        "selected_machine": result.get("selected_machine"),
+        "recommendation": result.get("recommendation"),
+        "reasoning": result.get("reasoning"),
+        "evidence": result.get("evidence"),
+        "required_actions": result.get("required_actions"),
+        "rejected_machines": result.get("machines_filtered_out"),
+        "retrieved_information": result.get("retrieved_information"),
+        "verification_result": result.get("verification_result"),
+        "execution_time_seconds": execution_time,
+        "generated_at": datetime.now().isoformat(),
+    }
+
+    json_bytes = json.dumps(export_data, indent=2, ensure_ascii=False, default=str).encode("utf-8")
+    pdf_bytes = build_pdf_report(order_payload, result, execution_time)
+
+    st.header("Export")
+
+    download_left, download_right = st.columns(2)
+    with download_left:
+        st.download_button(
+            "Download JSON",
+            data=json_bytes,
+            file_name=f"{order_id.strip()}_allocation_result.json",
+            mime="application/json",
+            use_container_width=True,
+        )
+    with download_right:
+        st.download_button(
+            "Download PDF Report",
+            data=pdf_bytes,
+            file_name=f"{order_id.strip()}_allocation_report.pdf",
+            mime="application/pdf",
+            use_container_width=True,
+        )
+
+
+# =========================================================
+# Router
+# =========================================================
+
+if st.session_state.page == "welcome":
+    render_welcome()
+else:
+    render_dashboard()
