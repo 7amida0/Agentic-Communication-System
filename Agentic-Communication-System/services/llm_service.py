@@ -9,9 +9,7 @@ class LLMService:
     def __init__(self) -> None:
         api_key = os.getenv("GEMINI_API_KEY")
         model_name = os.getenv(
-            "GEMINI_MODEL",
-            "gemini-2.5-flash",
-        )
+            "GEMINI_MODEL","gemini-3.6-flash", )
 
         if not api_key:
             raise ValueError(
