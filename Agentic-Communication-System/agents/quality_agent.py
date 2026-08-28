@@ -1,10 +1,7 @@
 from typing import Any
-
 from autogen_core import MessageContext, RoutedAgent, message_handler
-
 from messages.quality_assessment_request import QualityAssessmentRequest
 from messages.quality_assessment_response import QualityAssessmentResponse
-
 
 class QualityAgent(RoutedAgent):
     def __init__(self) -> None:
