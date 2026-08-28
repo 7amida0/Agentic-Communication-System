@@ -1,20 +1,11 @@
 from typing import Any
-
 from autogen_core import MessageContext, RoutedAgent, message_handler
-
-from messages.maintenance_assessment_request import (
-    MaintenanceAssessmentRequest,
-)
-from messages.maintenance_assessment_response import (
-    MaintenanceAssessmentResponse,
-)
-
+from messages.maintenance_assessment_request import (MaintenanceAssessmentRequest,)
+from messages.maintenance_assessment_response import (MaintenanceAssessmentResponse,)
 
 class MaintenanceAgent(RoutedAgent):
     def __init__(self) -> None:
-        super().__init__(
-            description="Evaluates machine health and maintenance status."
-        )
+        super().__init__(description="Evaluates machine health and maintenance status.")
 
     @message_handler
     async def handle_maintenance_request(
